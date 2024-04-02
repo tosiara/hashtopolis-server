@@ -2,10 +2,11 @@ version: '3.7'
 services:
   hashtopolis-backend:
     container_name: hashtopolis-backend
-    image: hashtopolis/backend:latest
+    image: hashtopolis2:latest
     restart: always
     volumes:
-      - hashtopolis:/usr/local/share/hashtopolis:Z
+      - /home/h/partition/hashtopolis2/server:/usr/local/share/hashtopolis:Z
+      - /home/h/partition/cron-backend:/etc/cron.d/hashtopolis
     environment:
       HASHTOPOLIS_DB_USER: $MYSQL_USER
       HASHTOPOLIS_DB_PASS: $MYSQL_PASSWORD
@@ -23,7 +24,8 @@ services:
     image: mysql:8.0
     restart: always
     volumes:
-      - db:/var/lib/mysql
+      - /home/h/partition/hashtopolis2/db:/var/lib/mysql
+      - /home/h/partition/cron-mysql:/etc/cron.d/hashtopolis
     environment:
       MYSQL_ROOT_PASSWORD: $MYSQL_ROOT_PASS
       MYSQL_DATABASE: $MYSQL_DATABASE
@@ -31,7 +33,7 @@ services:
       MYSQL_PASSWORD: $MYSQL_PASSWORD
   hashtopolis-frontend:
     container_name: hashtopolis-frontend
-    image: hashtopolis/frontend:latest
+    image: hashtopolis2-frontend:latest
     environment:
       HASHTOPOLIS_BACKEND_URL: $HASHTOPOLIS_BACKEND_URL
     restart: always
@@ -39,6 +41,4 @@ services:
       - hashtopolis-backend
     ports:
       - 4200:80
-volumes:
-  db:
-  hashtopolis:
+
