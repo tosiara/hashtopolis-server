@@ -27,6 +27,8 @@ use DBA\FileDelete;
 use DBA\Factory;
 use DBA\Speed;
 
+ini_set("memory_limit", "2G");
+
 /**
  *
  * @author Sein
@@ -701,7 +703,7 @@ class Util {
   public static function refresh() {
     global $_SERVER;
     
-    $url = $_SERVER['PHP_SELF'];
+    $url = SConfig::getInstance()->getVal(DConfig::BASE_URL) . $_SERVER['PHP_SELF'];
     if (strlen($_SERVER['QUERY_STRING']) > 0) {
       $url .= "?" . $_SERVER['QUERY_STRING'];
     }
