@@ -1,6 +1,11 @@
 <?php
 
-require_once(dirname(__FILE__) . "/inc/load.php");
+use Hashtopolis\inc\defines\DViewControl;
+use Hashtopolis\inc\templating\Template;
+use Hashtopolis\inc\UI;
+use Hashtopolis\inc\utils\AccessControl;
+
+require_once(dirname(__FILE__) . "/inc/startup/load.php");
 
 AccessControl::getInstance()->checkPermission(DViewControl::INDEX_VIEW_PERM);
 
@@ -19,7 +24,7 @@ if (isset($_GET['err'])) {
         UI::addMessage(UI::ERROR, "You need to fill in both fields!");
         break;
       case '3':
-        UI::addMessage(UI::ERROR, "Wrong username/password/OTP!");
+        UI::addMessage(UI::ERROR, "Wrong username/password!");
         break;
       case '4':
         UI::addMessage(UI::ERROR, "You need to be logged in to view this! Please log in again.");

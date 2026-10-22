@@ -1,17 +1,27 @@
 <?php
 
-use DBA\AccessGroupAgent;
-use DBA\AccessGroupUser;
-use DBA\Assignment;
-use DBA\Chunk;
-use DBA\ContainFilter;
-use DBA\OrderFilter;
-use DBA\QueryFilter;
-use DBA\AgentStat;
-use DBA\Agent;
-use DBA\Factory;
+use Hashtopolis\dba\models\AccessGroupAgent;
+use Hashtopolis\dba\models\AccessGroupUser;
+use Hashtopolis\dba\models\Assignment;
+use Hashtopolis\dba\models\Chunk;
+use Hashtopolis\dba\ContainFilter;
+use Hashtopolis\dba\OrderFilter;
+use Hashtopolis\dba\QueryFilter;
+use Hashtopolis\dba\models\AgentStat;
+use Hashtopolis\dba\models\Agent;
+use Hashtopolis\dba\Factory;
+use Hashtopolis\inc\DataSet;
+use Hashtopolis\inc\defines\DAgentStatsType;
+use Hashtopolis\inc\defines\DConfig;
+use Hashtopolis\inc\defines\DViewControl;
+use Hashtopolis\inc\Login;
+use Hashtopolis\inc\Menu;
+use Hashtopolis\inc\SConfig;
+use Hashtopolis\inc\templating\Template;
+use Hashtopolis\inc\UI;
+use Hashtopolis\inc\utils\AccessControl;
 
-require_once(dirname(__FILE__) . "/inc/load.php");
+require_once(dirname(__FILE__) . "/inc/startup/load.php");
 
 if (!Login::getInstance()->isLoggedin()) {
   header("Location: index.php?err=4" . time() . "&fw=" . urlencode($_SERVER['PHP_SELF'] . "?" . $_SERVER['QUERY_STRING']));
@@ -53,7 +63,7 @@ $qF3 = new QueryFilter(AgentStat::TIME, time() - SConfig::getInstance()->getVal(
 $stats = Factory::getAgentStatFactory()->filter([Factory::FILTER => [$qF1, $qF2, $qF3], Factory::ORDER => [$oF1, $oF2]]);
 $agentStats = new DataSet();
 foreach ($stats as $stat) {
-  if ($agentStats->getVal($stat->getAgentId()) === false) {
+  if ($agentStats->getVal($stat->getAgentId()) === null) {
     $agentStats->addValue($stat->getAgentId(), $stat);
   }
 }
@@ -67,7 +77,7 @@ $qF3 = new QueryFilter(AgentStat::TIME, time() - SConfig::getInstance()->getVal(
 $stats = Factory::getAgentStatFactory()->filter([Factory::FILTER => [$qF1, $qF2, $qF3], Factory::ORDER => [$oF1, $oF2]]);
 $agentStats = new DataSet();
 foreach ($stats as $stat) {
-  if ($agentStats->getVal($stat->getAgentId()) === false) {
+  if ($agentStats->getVal($stat->getAgentId()) === null) {
     $agentStats->addValue($stat->getAgentId(), $stat);
   }
 }
@@ -81,7 +91,7 @@ $qF3 = new QueryFilter(AgentStat::TIME, time() - SConfig::getInstance()->getVal(
 $stats = Factory::getAgentStatFactory()->filter([Factory::FILTER => [$qF1, $qF2, $qF3], Factory::ORDER => [$oF1, $oF2]]);
 $agentStats = new DataSet();
 foreach ($stats as $stat) {
-  if ($agentStats->getVal($stat->getAgentId()) === false) {
+  if ($agentStats->getVal($stat->getAgentId()) === null) {
     $agentStats->addValue($stat->getAgentId(), $stat);
   }
 }
@@ -93,6 +103,9 @@ $agentChunks = new DataSet();
 $agentAssignments = new DataSet();
 $agents = Factory::getAgentFactory()->filter([Factory::FILTER => $qF, Factory::ORDER => $oF]);
 foreach ($agents as $agent) {
+  $agentTasks->addValue($agent->getId(), 0);
+  $agentSpeeds->addValue($agent->getId(), 0);
+  $agentChunks->addValue($agent->getId(), 0);
   $qF1 = new QueryFilter(Chunk::AGENT_ID, $agent->getId(), "=");
   $qF2 = new QueryFilter(Chunk::SPEED, 0, ">");
   $chunks = Factory::getChunkFactory()->filter([Factory::FILTER => [$qF1, $qF2]]);

@@ -1,18 +1,13 @@
 <?php
 declare(strict_types=1);
 
-$enabled = getenv('HASHTOPOLIS_APIV2_ENABLE');
-if (!$enabled || $enabled == 'false') {
-  die("APIv2 is not enabled, it can be enabled via environment variable!");
-}
-
 date_default_timezone_set("UTC");
 error_reporting(E_ALL ^ E_DEPRECATED);
-ini_set("display_errors", '1');
+
 /**
- * Treat warnings as error, very usefull during unit testing.
- * TODO: How-ever during Xdebug debugging under VS Code, this is very 
- * TODO: slightly annoying since the last call stack is not very interesting. 
+ * Treat warnings as error, very useful during unit testing.
+ * TODO: How-ever during Xdebug debugging under VS Code, this is very
+ * TODO: slightly annoying since the last call stack is not very interesting.
  * TODO: Thus for the time-being do not-enable by default.
  */
 // set_error_handler(function ($severity, $message, $file, $line) {
@@ -21,191 +16,80 @@ ini_set("display_errors", '1');
 //   }
 // });
 
+use Hashtopolis\inc\apiv2\auth\HashtopolisAuthenticator;
+use Hashtopolis\inc\apiv2\auth\JWTBeforeHandler;
+use Hashtopolis\inc\apiv2\common\ClassMapper;
+use Hashtopolis\inc\apiv2\error\ErrorHandler;
+use Hashtopolis\inc\apiv2\util\CorsHackMiddleware;
+use Hashtopolis\inc\apiv2\util\JsonBodyParserMiddleware;
+use Hashtopolis\inc\apiv2\util\TokenAsParameterMiddleware;
+use Hashtopolis\inc\apiv2\common\ApiRegistry;
+
+use DI\Container;
+use Hashtopolis\inc\StartupConfig;
+use Psr\Container\ContainerInterface;
 use Slim\Factory\AppFactory;
 use Slim\Middleware\ContentLengthMiddleware;
-use Slim\Routing\RouteContext;
+use Slim\Exception\HttpMethodNotAllowedException;
 
-
-use Slim\Psr7\Response;
-
-use Skeleton\Domain\Token;
-use Crell\ApiProblem\ApiProblem;
-
-use Tuupola\Middleware\JwtAuthentication;
 use Tuupola\Middleware\HttpBasicAuthentication;
-use Tuupola\Middleware\HttpBasicAuthentication\AuthenticatorInterface;
-use Tuupola\Middleware\CorsMiddleware;
 
-use Skeleton\Application\Response\UnauthorizedResponse;
+use JimTools\JwtAuth\Decoder\FirebaseDecoder;
+use JimTools\JwtAuth\Middleware\JwtAuthentication;
+use JimTools\JwtAuth\Options;
+use JimTools\JwtAuth\Secret;
+use JimTools\JwtAuth\Exceptions\AuthorizationException;
 
-use Psr\Http\Message\ResponseInterface;
+use Middlewares\DeflateEncoder;
+
 use Psr\Http\Message\ServerRequestInterface as Request;
-use Psr\Http\Server\MiddlewareInterface;
-use Psr\Http\Server\RequestHandlerInterface as RequestHandler;
 
-use DBA\QueryFilter;
-use DBA\Session;
-use DBA\User;
-use DBA\Factory;
+use JimTools\JwtAuth\Rules\RequestMethodRule;
+use JimTools\JwtAuth\Rules\RequestPathRule;
 
-require __DIR__ . "/../../../vendor/autoload.php";
+require_once(__DIR__ . "/../../../vendor/autoload.php");
+require_once(__DIR__ . "/../../inc/startup/include.php");
 
-require_once(dirname(__FILE__) . "/../../inc/load.php");
-
- 
 /* Construct container for middleware */
-$container = new \DI\Container();
+$container = new Container();
 AppFactory::setContainer($container);
 
-
-/* Quirk to display error JSON style */
-function errorResponse($response, $message, $status = 401)
-{
-    $problem = new ApiProblem($message, "about:blank");
-    $problem->setStatus($status);
-
-    $body = $response->getBody();
-    $body->write($problem->asJson(true));
-
-    return $response
-        ->withHeader("Content-type", "application/problem+json")
-        ->withStatus($status);
-}
-
-
-/* Authentication middleware for token retrival */
-class HashtopolisAuthenticator implements AuthenticatorInterface {
-    public function __invoke(array $arguments): bool {
-        $username = $arguments["user"];
-        $password = $arguments["password"];
-
-        $filter = new QueryFilter(User::USERNAME, $username, "=");
-        
-        $check = Factory::getUserFactory()->filter([Factory::FILTER => $filter]);
-        if ($check === null || sizeof($check) == 0) {
-            return false;
-        }
-        $user = $check[0];
-        
-        if ($user->getIsValid() != 1) {
-            return false;
-        }
-        else if (!Encryption::passwordVerify($password, $user->getPasswordSalt(), $user->getPasswordHash())) {
-            Util::createLogEntry(DLogEntryIssuer::USER, $user->getId(), DLogEntry::WARN, "Failed login attempt due to wrong password!");
-            return false;
-        }
-        return true;
+$container->set("HttpBasicAuthentication", function (ContainerInterface $container) {
+  return new HttpBasicAuthentication([
+    "path" => "/api/v2/auth/token",
+    "secure" => false,
+    "error" => function ($response, $arguments) {
+      return ErrorHandler::errorResponse($response, $arguments["message"], 401);
+    },
+    "authenticator" => new HashtopolisAuthenticator,
+    "before" => function ($request, $arguments) {
+      return $request->withAttribute("user", $arguments["user"]);
     }
-}
-
-$container->set("HttpBasicAuthentication", function (\Psr\Container\ContainerInterface $container) {
-    return new HttpBasicAuthentication([
-        "path" => "/api/v2/auth/token",
-        "secure" => false,
-        "error" => function ($response, $arguments) {
-            return errorResponse($response, $arguments["message"], 401);
-        },
-        "authenticator" => new HashtopolisAuthenticator,
-        "before" => function ($request, $arguments) {
-            return $request->withAttribute("user", $arguments["user"]);
-        }
-    ]);
+  ]);
 });
 
-/* Quick to create auto-generated lookup table between DBA Objects and APIv2 classes */
-class ClassMapper {
-  private $store = array();  
-  public function add($key, $value) : void {
-    $this->store[$key] = $value;
-  }
-  public function get($key): string {
-    return $this->store[$key];
-  }
-}
-
-$container->set("classMapper", function() {
+$container->set("classMapper", function () {
   return new ClassMapper();
 });
 
 /* API token validation */
-$container->set("JwtAuthentication", function (\Psr\Container\ContainerInterface $container) {
-    include(dirname(__FILE__) . '/../../inc/confv2.php');
-    return new JwtAuthentication([
-        "path" => "/",
-        "ignore" => ["/api/v2/auth/token", "/api/v2/openapi.json"],
-        "secret" => $PEPPER[0],
-        "attribute" => false,
-        "secure" => false,
-        "error" => function ($response, $arguments) {
-            return errorResponse($response, $arguments["message"], 401);
-        },
-        "before" => function ($request, $arguments) use ($container) {
-            // TODO: Validate if user is still allowed to login
-            return $request->withAttribute("userId", $arguments["decoded"]["userId"])->withAttribute("scope", $arguments["decoded"]["scope"]);
-        },
-    ]);
+$container->set("JwtAuthentication", function (ContainerInterface $container) {
+  $decoder = new FirebaseDecoder(
+    new Secret(StartupConfig::getInstance()->getPepper(0), 'HS256', hash("sha256", StartupConfig::getInstance()->getPepper(0)))
+  );
+
+  $options = new Options(
+    isSecure: false,
+    attribute: null,
+    before: new JWTBeforeHandler
+  );
+
+  $rules = [
+    new RequestPathRule(ignore: ["/api/v2/auth/token", "/api/v2/auth/oauth-token", "/api/v2/auth/refresh", "/api/v2/helper/resetUserPassword", "/api/v2/openapi.json"]),
+    new RequestMethodRule(ignore: ["OPTIONS"])
+  ];
+  return new JwtAuthentication($options, $decoder, $rules);
 });
-
-
-/* Pre-parse incoming request body */
-class JsonBodyParserMiddleware implements MiddlewareInterface
-{
-    public function process(Request $request, RequestHandler $handler): Response
-    {
-        $contentType = $request->getHeaderLine('Content-Type');
-
-        if (strstr($contentType, 'application/json')) {
-            $contents = json_decode(file_get_contents('php://input'), true);
-            if (json_last_error() === JSON_ERROR_NONE) {
-                $request = $request->withParsedBody($contents);
-            } else {
-                $response = new Response();
-                return errorResponse($response, "Malformed request", 400);
-            }
-        }
-
-        $response = $handler->handle($request);
-        return $response;
-    }
-}
-
-/* Quirk to map token as parameter (usefull for debugging) to 'Authorization Header (for JWT input) */
-class TokenAsParameterMiddleware implements MiddlewareInterface
-{
-    public function process(Request $request, RequestHandler $handler): Response
-    {
-        $data = $request->getQueryParams();
-        if (array_key_exists('token', $data)) {
-            $request = $request->withHeader('Authorization', 'Bearer ' . $data['token']);
-        };
-
-        $response = $handler->handle($request);
-        return $response;
-    }
-}
-
-
-/* FIXME: CORS wildcard hack should require proper implementation and validation */
-/* This middleware will append the response header Access-Control-Allow-Methods with all allowed methods */
-class CorsHackMiddleware implements MiddlewareInterface 
-{
-    public function process(Request $request, RequestHandler $handler): Response {
-        $routeContext = RouteContext::fromRequest($request);
-        $routingResults = $routeContext->getRoutingResults();
-        $methods = $routingResults->getAllowedMethods();
-        $requestHeaders = $request->getHeaderLine('Access-Control-Request-Headers');
-    
-        $response = $handler->handle($request);
-    
-        $response = $response->withHeader('Access-Control-Allow-Origin', '*');
-        $response = $response->withHeader('Access-Control-Allow-Methods', implode(',', $methods));
-        $response = $response->withHeader('Access-Control-Allow-Headers', $requestHeaders);
-    
-        // Optional: Allow Ajax CORS requests with Authorization header
-        // $response = $response->withHeader('Access-Control-Allow-Credentials', 'true');
-        return $response;
-    }
-}
 
 /* 
  * SLIM framework middleware requires specific order to ensure middleware layers are executed in correct order.
@@ -224,61 +108,76 @@ $app->add(new JsonBodyParserMiddleware());
 $app->add("HttpBasicAuthentication");
 $app->add("JwtAuthentication");
 $app->add(new TokenAsParameterMiddleware());
+$app->add((new DeflateEncoder())->contentType(
+  '/^(image\/svg\\+xml|text\/.*|application\/json|"application\/vnd\.api+json)(;.*)?$/'
+)
+);
 $app->add(new ContentLengthMiddleware());       // NOTE: Add any middleware which may modify the response body before adding the ContentLengthMiddleware
 
+$app->add(new CorsHackMiddleware());            // NOTE: The RoutingMiddleware should be added after our CORS middleware so routing is performed first
 // NOTE: The ErrorMiddleware should be added after any middleware which may modify the response body
 $errorMiddleware = $app->addErrorMiddleware(true, true, true);
 $errorHandler = $errorMiddleware->getDefaultErrorHandler();
 $errorHandler->forceContentType('application/json');
 
-$app->add(new CorsHackMiddleware());            // NOTE: The RoutingMiddleware should be added after our CORS middleware so routing is performed first
-$app->addRoutingMiddleware();
+$customErrorHandler = function (
+  Request $request,
+  Throwable $exception,
+  bool $displayErrorDetails,
+  bool $logErrors,
+  bool $logErrorDetails) use ($app) {
+  
+  $response = $app->getResponseFactory()->createResponse();
+  /* An unrecognised Origin is itself reported by throwing, so decorating the error response can throw
+     a second time. Answering the original error without CORS headers is the right outcome: the browser
+     withholds the response from the caller, which is what a rejected origin should get. */
+  try {
+    $response = CorsHackMiddleware::addCORSheaders($request, $response);
+  }
+  catch (Throwable $corsException) {
+    error_log($corsException->getMessage());
+  }
+  
+  //Quirk to handle HTExceptions without status code, this can be removed when all HTExceptions have been migrated
+  error_log($exception->getMessage());
+  $code = $exception->getCode();
+  if ($code == 0 || $code == 1 || !is_integer($code)) {
+    $code = 500;
+  }
 
-require __DIR__ . "/../../inc/apiv2/auth/token.routes.php";
+  $msg = $exception->getMessage();
 
-require __DIR__ . "/../../inc/apiv2/common/openAPISchema.routes.php";
+  if ($exception instanceof AuthorizationException && empty($msg)) {
+    //the JWT authorization exceptions are wrapped in an outer exception
+    $previous = $exception->getPrevious();
+    if ($previous !== null) {
+      $code = 400;
+      $msg = $previous->getMessage();
+    }
+  }
+  
+  return ErrorHandler::errorResponse($response, $msg, $code);
+};
+$errorMiddleware->setDefaultErrorHandler($customErrorHandler);
+$app->addRoutingMiddleware(); //Routing middleware has to be added after the default error handler
+$errorMiddlewareMethodNotAllowed = $app->addErrorMiddleware(true, true, true);
+$errorMiddlewareMethodNotAllowed->setErrorHandler(HttpMethodNotAllowedException::class, function (
+  Request $request,
+  Throwable $exception,
+  bool $displayErrorDetails,
+  bool $logErrors,
+  bool $logErrorDetails) use ($app) {
+  $response = $app->getResponseFactory()->createResponse();
+  return ErrorHandler::errorResponse($response, $exception->getMessage(), 405);
+});
 
-require __DIR__ . "/../../inc/apiv2/model/accessgroups.routes.php";
-require __DIR__ . "/../../inc/apiv2/model/agentassignments.routes.php";
-require __DIR__ . "/../../inc/apiv2/model/agentbinaries.routes.php";
-require __DIR__ . "/../../inc/apiv2/model/agents.routes.php";
-require __DIR__ . "/../../inc/apiv2/model/agentstats.routes.php";
-require __DIR__ . "/../../inc/apiv2/model/chunks.routes.php";
-require __DIR__ . "/../../inc/apiv2/model/configs.routes.php";
-require __DIR__ . "/../../inc/apiv2/model/configsections.routes.php";
-require __DIR__ . "/../../inc/apiv2/model/crackers.routes.php";
-require __DIR__ . "/../../inc/apiv2/model/crackertypes.routes.php";
-require __DIR__ . "/../../inc/apiv2/model/files.routes.php";
-require __DIR__ . "/../../inc/apiv2/model/globalpermissiongroups.routes.php";
-require __DIR__ . "/../../inc/apiv2/model/hashes.routes.php";
-require __DIR__ . "/../../inc/apiv2/model/hashlists.routes.php";
-require __DIR__ . "/../../inc/apiv2/model/hashtypes.routes.php";
-require __DIR__ . "/../../inc/apiv2/model/healthcheckagents.routes.php";
-require __DIR__ . "/../../inc/apiv2/model/healthchecks.routes.php";
-require __DIR__ . "/../../inc/apiv2/model/logentries.routes.php";
-require __DIR__ . "/../../inc/apiv2/model/notifications.routes.php";
-require __DIR__ . "/../../inc/apiv2/model/preprocessors.routes.php";
-require __DIR__ . "/../../inc/apiv2/model/pretasks.routes.php";
-require __DIR__ . "/../../inc/apiv2/model/speeds.routes.php";
-require __DIR__ . "/../../inc/apiv2/model/supertasks.routes.php";
-require __DIR__ . "/../../inc/apiv2/model/tasks.routes.php";
-require __DIR__ . "/../../inc/apiv2/model/taskwrappers.routes.php";
-require __DIR__ . "/../../inc/apiv2/model/users.routes.php";
-require __DIR__ . "/../../inc/apiv2/model/vouchers.routes.php";
+include(__DIR__ . "/../../inc/apiv2/common/openAPISchema.routes.php");
+include(__DIR__ . "/../../inc/apiv2/auth/token.routes.php");
 
-require __DIR__ . "/../../inc/apiv2/helper/abortChunk.routes.php";
-require __DIR__ . "/../../inc/apiv2/helper/assignAgent.routes.php";
-require __DIR__ . "/../../inc/apiv2/helper/createSupertask.routes.php";
-require __DIR__ . "/../../inc/apiv2/helper/createSuperHashlist.routes.php";
-require __DIR__ . "/../../inc/apiv2/helper/exportCrackedHashes.routes.php";
-require __DIR__ . "/../../inc/apiv2/helper/exportLeftHashes.routes.php";
-require __DIR__ . "/../../inc/apiv2/helper/exportWordlist.routes.php";
-require __DIR__ . "/../../inc/apiv2/helper/importCrackedHashes.routes.php";
-require __DIR__ . "/../../inc/apiv2/helper/importFile.routes.php";
-require __DIR__ . "/../../inc/apiv2/helper/purgeTask.routes.php";
-require __DIR__ . "/../../inc/apiv2/helper/recountFileLines.routes.php";
-require __DIR__ . "/../../inc/apiv2/helper/resetChunk.routes.php";
-require __DIR__ . "/../../inc/apiv2/helper/setUserPassword.routes.php";
-require __DIR__ . "/../../inc/apiv2/helper/unassignAgent.routes.php";
+// register model and helper APIs (order matters: it defines route and
+// OpenAPI spec ordering, see ApiRegistry)
+foreach (ApiRegistry::allApiClasses() as $apiClass) {
+  $apiClass::register($app);
+}
 
 $app->run();

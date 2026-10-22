@@ -1,6 +1,11 @@
 <?php
 
-require_once(dirname(__FILE__) . "/inc/load.php");
+use Hashtopolis\inc\defines\DViewControl;
+use Hashtopolis\inc\Login;
+use Hashtopolis\inc\Util;
+use Hashtopolis\inc\utils\AccessControl;
+
+require_once(dirname(__FILE__) . "/inc/startup/load.php");
 
 AccessControl::getInstance()->checkPermission(DViewControl::LOGIN_VIEW_PERM);
 
@@ -12,8 +17,6 @@ if (!isset($_POST['username']) || !isset($_POST['password'])) {
 $username = $_POST['username'];
 $password = $_POST['password'];
 
-// isYubikeyEnabled() ?
-$otp = (isset($_POST['otp'])) ? $_POST['otp'] : "";
 $fw = (isset($_POST['fw'])) ? $_POST['fw'] : "";
 
 if (strlen($username) == 0 || strlen($password) == 0) {
@@ -21,7 +24,7 @@ if (strlen($username) == 0 || strlen($password) == 0) {
   die();
 }
 
-Login::getInstance()->login($username, $password, $otp);
+Login::getInstance()->login($username, $password);
 
 if (Login::getInstance()->isLoggedin()) {
   if (strlen($fw) > 0) {
