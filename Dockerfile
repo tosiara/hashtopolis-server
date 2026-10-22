@@ -38,7 +38,7 @@ RUN apt-get update \
     # Install git, procps, lsb-release (useful for CLI installs)
     && apt-get -y install git iproute2 procps lsb-release \
     && apt-get -y install mariadb-client \
-    && apt-get -y install libpng-dev \
+    && apt-get -y install libpng-dev unattended-upgrades \
 \
     # Install extensions (optional)
     && docker-php-ext-install pdo_mysql gd \
